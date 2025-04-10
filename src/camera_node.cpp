@@ -6,42 +6,60 @@
 class CameraNode : public rclcpp::Node 
 {
 public:
-    CameraNode() : Node("camera_node"), cap_(0) {
-        if (!cap_.isOpened()) {
-            RCLCPP_ERROR(this->get_logger(), "Kamera gagal dibuka");
+    CameraNode()
+        : Node("camera_node"), cap_(0)
+    {
+        if (!init_camera()) {
             rclcpp::shutdown();
             return;
         }
 
-        publisher_ = this->create_publisher<sensor_msgs::msg::Image>("/image_raw", 10);
+        publisher_ = this->create_publisher<ImageMsg>(kTopicName, 10);
 
         timer_ = this->create_wall_timer(
-            std::chrono::milliseconds(33),  // ~30 FPS
-            std::bind(&CameraNode::camera_callback, this));
+            std::chrono::milliseconds(33), // ~30 FPS
+            [this]() { this->publish_frame(); }
+        );
     }
 
 private:
-    cv::VideoCapture cap_;
-    rclcpp::TimerBase::SharedPtr timer_;
-    rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr publisher_;
+    using ImageMsg = sensor_msgs::msg::Image;
+    using Publisher = rclcpp::Publisher<ImageMsg>::SharedPtr;
+    using Timer = rclcpp::TimerBase::SharedPtr;
 
-    void camera_callback()
+    static constexpr const char* kTopicName = "/image_raw";
+    static constexpr const char* kFrameId = "camera_frame";
+
+    cv::VideoCapture cap_;
+    Publisher publisher_;
+    Timer timer_;
+
+    bool init_camera()
+    {
+        if (!cap_.isOpened()) {
+            RCLCPP_ERROR(this->get_logger(), "Kamera gagal dibuka");
+            return false;
+        }
+        return true;
+    }
+
+    void publish_frame()
     {
         cv::Mat frame;
         cap_ >> frame;
 
         if (frame.empty()) {
-            RCLCPP_WARN(this->get_logger(), "Frame kosong");
+            RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 2000, "Frame kosong");
             return;
         }
 
         std_msgs::msg::Header header;
         header.stamp = this->now();
-        header.frame_id = "camera_frame";
+        header.frame_id = kFrameId;
 
         auto msg = cv_bridge::CvImage(header, "bgr8", frame).toImageMsg();
         publisher_->publish(*msg);
-        // RCLCPP_DEBUG(this->get_logger(), "Frame published");
+        RCLCPP_DEBUG(this->get_logger(), "Frame published");
     }
 };
 
