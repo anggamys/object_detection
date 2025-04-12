@@ -1,3 +1,6 @@
 # Model detection
 *.pt
 *.onnx
+
+# File testing
+testing/*

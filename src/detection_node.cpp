@@ -8,36 +8,61 @@ class DetectionNode : public rclcpp::Node
 {
 public:
     DetectionNode()
-        : Node("detection_node")
+        : Node("detection_node"), model_loaded_(false)
     {
+        this->declare_parameter<bool>("use_gpu", false);
+        bool use_gpu = this->get_parameter("use_gpu").as_bool();
+
         // Load YOLO model
-        const std::string model_path = "../models/yolov8n.onnx";
+        const std::string model_path = "/home/c0delb08/ros2_ws/src/object_detection/models/yolov8n.onnx";
         try {
             net_ = cv::dnn::readNetFromONNX(model_path);
-            net_.setPreferableBackend(cv::dnn::DNN_BACKEND_OPENCV);
-            net_.setPreferableTarget(cv::dnn::DNN_TARGET_CPU);
+
+            if (net_.empty()) {
+                throw std::runtime_error("Model file could not be loaded or is empty.");
+            }
+
+            if (use_gpu) {
+                net_.setPreferableBackend(cv::dnn::DNN_BACKEND_CUDA);
+                net_.setPreferableTarget(cv::dnn::DNN_TARGET_CUDA);
+                RCLCPP_INFO(this->get_logger(), "Using GPU (CUDA) for inference");
+            } else {
+                net_.setPreferableBackend(cv::dnn::DNN_BACKEND_OPENCV);
+                net_.setPreferableTarget(cv::dnn::DNN_TARGET_CPU);
+                RCLCPP_INFO(this->get_logger(), "Using CPU for inference");
+            }
+
+            model_loaded_ = true;
             RCLCPP_INFO(this->get_logger(), "YOLO model loaded: %s", model_path.c_str());
         } catch (const cv::Exception& e) {
-            RCLCPP_FATAL(this->get_logger(), "Failed to load model: %s", e.what());
-            rclcpp::shutdown();
+            RCLCPP_FATAL(this->get_logger(), "OpenCV error loading model: %s", e.what());
+        } catch (const std::exception& e) {
+            RCLCPP_FATAL(this->get_logger(), "Error loading model: %s", e.what());
         }
 
-        // Image subscriber
-        subscription_ = this->create_subscription<sensor_msgs::msg::Image>(
-            "/image_raw", 10,
-            std::bind(&DetectionNode::image_callback, this, std::placeholders::_1));
+        if (model_loaded_) {
+            // Image subscriber
+            subscription_ = this->create_subscription<sensor_msgs::msg::Image>(
+                "/image_raw", 10,
+                std::bind(&DetectionNode::image_callback, this, std::placeholders::_1));
 
-        // Image publisher
-        publisher_ = this->create_publisher<sensor_msgs::msg::Image>("/image_detected", 10);
+            // Image publisher
+            publisher_ = this->create_publisher<sensor_msgs::msg::Image>("/image_detected", 10);
+        } else {
+            RCLCPP_FATAL(this->get_logger(), "Model not loaded. Node will not subscribe or publish.");
+        }
     }
 
 private:
     rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr subscription_;
     rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr publisher_;
     cv::dnn::Net net_;
+    bool model_loaded_;
 
     void image_callback(const sensor_msgs::msg::Image::SharedPtr msg)
     {
+        if (!model_loaded_) return;
+
         cv::Mat frame;
         try {
             frame = cv_bridge::toCvShare(msg, "bgr8")->image;
@@ -58,12 +83,16 @@ private:
 
         // Forward pass
         std::vector<cv::Mat> outputs;
-        net_.forward(outputs, net_.getUnconnectedOutLayersNames());
+        try {
+            net_.forward(outputs, net_.getUnconnectedOutLayersNames());
+        } catch (const cv::Exception& e) {
+            RCLCPP_ERROR(this->get_logger(), "Model inference failed: %s", e.what());
+            return;
+        }
 
         const auto& detection = outputs[0];
         const int rows = detection.size[1];
         const int cols = detection.size[2];
-
         const float* data = reinterpret_cast<float*>(detection.data);
 
         for (int i = 0; i < rows; ++i) {
@@ -73,8 +102,7 @@ private:
                 continue;
             }
 
-            // Get class with max score
-            float* class_scores = const_cast<float*>(data + 5);  // OpenCV expects non-const
+            float* class_scores = const_cast<float*>(data + 5);
             cv::Mat scores(1, cols - 5, CV_32FC1, class_scores);
             cv::Point class_id_point;
             double max_class_score;
@@ -99,7 +127,6 @@ private:
             data += cols;
         }
 
-        // Publish processed frame
         auto output_msg = cv_bridge::CvImage(msg->header, "bgr8", frame).toImageMsg();
         publisher_->publish(*output_msg);
     }
@@ -108,7 +135,10 @@ private:
 int main(int argc, char **argv) 
 {
     rclcpp::init(argc, argv);
-    rclcpp::spin(std::make_shared<DetectionNode>());
+    auto node = std::make_shared<DetectionNode>();
+    if (rclcpp::ok()) {
+        rclcpp::spin(node);
+    }
     rclcpp::shutdown();
     return 0;
 }

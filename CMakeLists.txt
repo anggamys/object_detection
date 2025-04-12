@@ -21,10 +21,25 @@ ament_target_dependencies(camera_node
   OpenCV
 )
 
+add_executable(detection_node src/detection_node.cpp)
+ament_target_dependencies(detection_node
+  rclcpp
+  sensor_msgs
+  cv_bridge
+  OpenCV
+)
+
 # Install targets
 install(TARGETS
   camera_node
+  detection_node
   DESTINATION lib/${PROJECT_NAME}
+)
+
+# Install launch file
+install(DIRECTORY
+  launch
+  DESTINATION share/${PROJECT_NAME}/
 )
 
 if(BUILD_TESTING)
