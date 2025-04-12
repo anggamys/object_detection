@@ -11,7 +11,7 @@ public:
         : Node("detection_node")
     {
         // Load YOLO model
-        const std::string model_path = "yolov5s.onnx";
+        const std::string model_path = "../models/yolov8n.onnx";
         try {
             net_ = cv::dnn::readNetFromONNX(model_path);
             net_.setPreferableBackend(cv::dnn::DNN_BACKEND_OPENCV);

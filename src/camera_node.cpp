@@ -17,7 +17,7 @@ public:
         publisher_ = this->create_publisher<ImageMsg>(kTopicName, 10);
 
         timer_ = this->create_wall_timer(
-            std::chrono::milliseconds(33), // ~30 FPS
+            std::chrono::milliseconds(33),
             [this]() { this->publish_frame(); }
         );
     }
