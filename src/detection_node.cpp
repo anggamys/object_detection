@@ -10,14 +10,17 @@ public:
     DetectionNode()
         : Node("detection_node"), model_loaded_(false)
     {
+        // Declare parameters (Default values)
         this->declare_parameter<bool>("use_gpu", false);
-        bool use_gpu = this->get_parameter("use_gpu").as_bool();
+        this->declare_parameter<std::string>("model_path", "/home/c0delb08/ros2_ws/src/object_detection/models/yolov8n.onnx");
+        this->declare_parameter<double>("confidence_threshold", 0.4);
 
-        // Load YOLO model
-        const std::string model_path = "/home/c0delb08/ros2_ws/src/object_detection/models/yolov8n.onnx";
+        bool use_gpu = this->get_parameter("use_gpu").as_bool();
+        std::string model_path = this->get_parameter("model_path").as_string();
+        confidence_threshold_ = this->get_parameter("confidence_threshold").as_double();
+
         try {
             net_ = cv::dnn::readNetFromONNX(model_path);
-
             if (net_.empty()) {
                 throw std::runtime_error("Model file could not be loaded or is empty.");
             }
@@ -41,12 +44,10 @@ public:
         }
 
         if (model_loaded_) {
-            // Image subscriber
             subscription_ = this->create_subscription<sensor_msgs::msg::Image>(
                 "/image_raw", 10,
                 std::bind(&DetectionNode::image_callback, this, std::placeholders::_1));
 
-            // Image publisher
             publisher_ = this->create_publisher<sensor_msgs::msg::Image>("/image_detected", 10);
         } else {
             RCLCPP_FATAL(this->get_logger(), "Model not loaded. Node will not subscribe or publish.");
@@ -58,6 +59,7 @@ private:
     rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr publisher_;
     cv::dnn::Net net_;
     bool model_loaded_;
+    double confidence_threshold_;
 
     void image_callback(const sensor_msgs::msg::Image::SharedPtr msg)
     {
@@ -76,12 +78,12 @@ private:
             return;
         }
 
-        // Preprocess
+        // Preprocess image
         cv::Mat blob;
         cv::dnn::blobFromImage(frame, blob, 1.0 / 255.0, cv::Size(640, 640), cv::Scalar(), true, false);
         net_.setInput(blob);
 
-        // Forward pass
+        // Run forward pass
         std::vector<cv::Mat> outputs;
         try {
             net_.forward(outputs, net_.getUnconnectedOutLayersNames());
@@ -96,37 +98,42 @@ private:
         const float* data = reinterpret_cast<float*>(detection.data);
 
         for (int i = 0; i < rows; ++i) {
-            float confidence = data[4];
-            if (confidence < 0.4f) {
-                data += cols;
-                continue;
-            }
-
+            float objectness = data[4];
             float* class_scores = const_cast<float*>(data + 5);
             cv::Mat scores(1, cols - 5, CV_32FC1, class_scores);
+
             cv::Point class_id_point;
             double max_class_score;
             cv::minMaxLoc(scores, nullptr, &max_class_score, nullptr, &class_id_point);
 
-            if (max_class_score > 0.5) {
-                int cx = static_cast<int>(data[0] * frame.cols);
-                int cy = static_cast<int>(data[1] * frame.rows);
-                int w  = static_cast<int>(data[2] * frame.cols);
-                int h  = static_cast<int>(data[3] * frame.rows);
-
-                int left = std::max(cx - w / 2, 0);
-                int top  = std::max(cy - h / 2, 0);
-                int right = std::min(left + w, frame.cols - 1);
-                int bottom = std::min(top + h, frame.rows - 1);
-
-                cv::rectangle(frame, cv::Rect(left, top, right - left, bottom - top), cv::Scalar(0, 255, 0), 2);
-                cv::putText(frame, std::to_string(class_id_point.x), cv::Point(left, top - 10),
-                            cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(0, 255, 0), 1);
+            float confidence = objectness * static_cast<float>(max_class_score);
+            if (confidence < confidence_threshold_) {
+                data += cols;
+                continue;
             }
+
+            // Get bounding box
+            int cx = static_cast<int>(data[0] * frame.cols);
+            int cy = static_cast<int>(data[1] * frame.rows);
+            int w  = static_cast<int>(data[2] * frame.cols);
+            int h  = static_cast<int>(data[3] * frame.rows);
+
+            int left = std::max(cx - w / 2, 0);
+            int top  = std::max(cy - h / 2, 0);
+            int right = std::min(left + w, frame.cols - 1);
+            int bottom = std::min(top + h, frame.rows - 1);
+
+            cv::rectangle(frame, cv::Rect(left, top, right - left, bottom - top), cv::Scalar(0, 255, 0), 2);
+            cv::putText(frame, 
+                        "ID: " + std::to_string(class_id_point.x), 
+                        cv::Point(left, top - 10),
+                        cv::FONT_HERSHEY_SIMPLEX, 0.5, 
+                        cv::Scalar(0, 255, 0), 1);
 
             data += cols;
         }
 
+        // Publish the image
         auto output_msg = cv_bridge::CvImage(msg->header, "bgr8", frame).toImageMsg();
         publisher_->publish(*output_msg);
     }

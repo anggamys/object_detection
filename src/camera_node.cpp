@@ -4,6 +4,7 @@
 #include "opencv2/opencv.hpp"
 #include <algorithm>
 #include <stdexcept>
+#include <cctype>
 
 using std::placeholders::_1;
 
@@ -13,21 +14,19 @@ public:
     CameraNode()
     : Node("camera_node")
     {
-        // Parameter with default value
         this->declare_parameter<std::string>("source", "0");
-
-        // Get parameter from command line
         std::string source = this->get_parameter("source").as_string();
 
-        // Check if source is a number (camera) or string (video file)
+        // Trim whitespace dari source
+        source.erase(std::remove_if(source.begin(), source.end(), ::isspace), source.end());
+
+        // Coba buka kamera atau file video
         if (std::all_of(source.begin(), source.end(), ::isdigit)) {
             int camera_index = std::stoi(source);
             cap_.open(camera_index);
         } else {
-            // Try opening with default backend first
             cap_.open(source);
             if (!cap_.isOpened()) {
-                // If failed, try with FFMPEG
                 cap_.open(source, cv::CAP_FFMPEG);
             }
         }
@@ -38,11 +37,29 @@ public:
             throw std::runtime_error(error_msg);
         }
 
-        RCLCPP_INFO(this->get_logger(), "Successfully opened video source: %s", source.c_str());
-        
+        // Info FPS dan ukuran frame
+        double fps = cap_.get(cv::CAP_PROP_FPS);
+        int width = static_cast<int>(cap_.get(cv::CAP_PROP_FRAME_WIDTH));
+        int height = static_cast<int>(cap_.get(cv::CAP_PROP_FRAME_HEIGHT));
+        RCLCPP_INFO(this->get_logger(), "Video source opened: %s", source.c_str());
+        RCLCPP_INFO(this->get_logger(), "Resolution: %dx%d, FPS: %.2f", width, height, fps);
+
+        // Atur interval berdasarkan FPS (default ke 30 fps jika tidak diketahui)
+        int interval = fps > 1.0 ? static_cast<int>(1000.0 / fps) : 33;
+
         publisher_ = this->create_publisher<sensor_msgs::msg::Image>(kTopicName, 10);
-        timer_ = this->create_wall_timer(std::chrono::milliseconds(33), 
-                                       std::bind(&CameraNode::publish_frame, this));
+        timer_ = this->create_wall_timer(
+            std::chrono::milliseconds(interval),
+            std::bind(&CameraNode::publish_frame, this)
+        );
+    }
+
+    ~CameraNode()
+    {
+        if (cap_.isOpened()) {
+            cap_.release();
+            RCLCPP_INFO(this->get_logger(), "Video source released.");
+        }
     }
 
 private:
@@ -59,7 +76,7 @@ private:
         cap_ >> frame;
 
         if (frame.empty()) {
-            RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 2000, "Empty frame");
+            RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 2000, "Empty frame captured.");
             return;
         }
 
