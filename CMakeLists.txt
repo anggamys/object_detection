@@ -12,6 +12,22 @@ find_package(sensor_msgs REQUIRED)
 find_package(cv_bridge REQUIRED)
 find_package(OpenCV REQUIRED)
 
+# # Try to find ONNX Runtime
+# find_package(ONNXRuntime REQUIRED)  # Note: Package name might be different
+
+# # If find_package doesn't work, try alternative methods
+# if(NOT ONNXRuntime_FOUND)
+#   # Option 1: Use pkg-config if available
+#   find_package(PkgConfig REQUIRED)
+#   pkg_check_modules(ONNXRuntime onnxruntime)
+  
+#   # Option 2: Manual paths if needed
+#   if(NOT ONNXRuntime_FOUND)
+    set(ONNXRUNTIME_INCLUDE_DIRS "/opt/onnxruntime-linux-x64-1.21.0/include")
+    set(ONNXRUNTIME_LIBRARIES "/opt/onnxruntime-linux-x64-1.21.0/lib/libonnxruntime.so")
+#   endif()
+# endif()
+
 # Kamera Node (publisher)
 add_executable(camera_node src/camera_node.cpp)
 ament_target_dependencies(camera_node
@@ -22,6 +38,8 @@ ament_target_dependencies(camera_node
 )
 
 add_executable(detection_node src/detection_node.cpp)
+target_include_directories(detection_node PRIVATE ${ONNXRUNTIME_INCLUDE_DIRS})
+target_link_libraries(detection_node ${ONNXRUNTIME_LIBRARIES})
 ament_target_dependencies(detection_node
   rclcpp
   sensor_msgs
@@ -44,12 +62,7 @@ install(DIRECTORY
 
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
-  # the following line skips the linter which checks for copyrights
-  # comment the line when a copyright and license is added to all source files
   set(ament_cmake_copyright_FOUND TRUE)
-  # the following line skips cpplint (only works in a git repo)
-  # comment the line when this package is in a git repo and when
-  # a copyright and license is added to all source files
   set(ament_cmake_cpplint_FOUND TRUE)
   ament_lint_auto_find_test_dependencies()
 endif()
